@@ -2,37 +2,60 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Проект с Firebase</title>
+    <title>Личные сообщения</title>
     <style>
         body {
             font-family: sans-serif;
             display: flex;
             justify-content: center;
+            align-items: flex-start;
             padding: 50px;
             background-color: #f4f4f9;
         }
-        .form-container {
-            background: white;
-            padding: 25px;
-            border-radius: 10px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-            width: 300px;
+        .container {
+            width: 400px;
             display: flex;
             flex-direction: column;
             gap: 10px;
         }
-        input, button {
-            width: 100%;
+        .user-info, .chat-select, .chat-box {
+            background: white;
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        .chat-box {
+            display: flex;
+            flex-direction: column;
+            height: 400px;
+            overflow-y: auto;
+            gap: 5px;
+        }
+        .message {
+            padding: 5px 10px;
+            border-radius: 10px;
+            max-width: 80%;
+        }
+        .message.self {
+            background-color: #007bff;
+            color: white;
+            align-self: flex-end;
+        }
+        .message.other {
+            background-color: #e5e5ea;
+            align-self: flex-start;
+        }
+        input, button, select {
             padding: 10px;
-            box-sizing: border-box;
             border-radius: 5px;
             border: 1px solid #ccc;
+            box-sizing: border-box;
         }
         button {
+            background: #f4d800;
             border: none;
             font-weight: bold;
             cursor: pointer;
-            background: #f4d800;
             color: white;
         }
         button:hover {
@@ -41,105 +64,174 @@
     </style>
 </head>
 <body>
-    <div class="form-container">
-        <button id="loginBtn" onclick="login()">Войти через Google</button>
-        <button id="logoutBtn" onclick="logout()" style="display:none;">Выйти</button>
+    <div class="container">
+        <div class="user-info">
+            <button id="loginBtn">Войти через Google</button>
+            <button id="logoutBtn" style="display:none;">Выйти</button>
+            <div id="currentUser" style="margin-top:10px;"></div>
+        </div>
 
-        <form id="feedbackForm" style="display:none;">
-            <input type="text" id="userName" placeholder="Ваше имя" required>
-            <input type="email" id="userEmail" placeholder="Ваш email" required>
-            <input type="file" id="userImage" accept="image/*">
-            <button type="submit">Отправить</button>
-        </form>
+        <div class="chat-select" style="display:none;">
+            <select id="userList"></select>
+            <button id="startChatBtn">Начать чат</button>
+        </div>
+
+        <div class="chat-box" id="chatBox" style="display:none;">
+            <div id="messages"></div>
+            <input type="text" id="messageInput" placeholder="Ваше сообщение">
+            <button id="sendBtn">Отправить</button>
+        </div>
     </div>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js";
-        import { getFirestore, collection, addDoc } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, doc, getDocs, query, where, onSnapshot, setDoc } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js";
         import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-auth.js";
-        import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-storage.js";
 
+        // Firebase конфиг
         const firebaseConfig = {
             apiKey: "AIzaSyC6Od5o91VbuC42L365J56jhrw3RhPN1Y8",
             authDomain: "alissa-2ofaf8.firebaseapp.com",
             projectId: "alissa-2ofaf8",
             storageBucket: "alissa-2ofaf8.appspot.com",
             messagingSenderId: "846548826923",
-            appId: "YOUR_APP_ID" // вставьте appId из Firebase
+            appId: "YOUR_APP_ID"
         };
 
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
         const auth = getAuth(app);
-        const storage = getStorage(app);
         const provider = new GoogleAuthProvider();
 
+        let currentUser = null;
+        let currentChatId = null;
+        let unsubscribeMessages = null;
+
         // ===== Авторизация =====
-        async function login() {
+        const loginBtn = document.getElementById("loginBtn");
+        const logoutBtn = document.getElementById("logoutBtn");
+        const currentUserDiv = document.getElementById("currentUser");
+        const userListDiv = document.getElementById("userList");
+        const chatSelectDiv = document.querySelector(".chat-select");
+        const chatBoxDiv = document.getElementById("chatBox");
+
+        loginBtn.onclick = async () => {
             try {
                 await signInWithPopup(auth, provider);
-            } catch (error) {
-                console.error("Ошибка входа:", error);
-            }
+            } catch(e) { console.error(e); }
         }
 
-        function logout() {
-            signOut(auth);
-        }
+        logoutBtn.onclick = () => signOut(auth);
 
-        onAuthStateChanged(auth, user => {
-            const form = document.getElementById("feedbackForm");
-            const loginBtn = document.getElementById("loginBtn");
-            const logoutBtn = document.getElementById("logoutBtn");
-
-            if (user) {
-                form.style.display = "block";
+        onAuthStateChanged(auth, async user => {
+            if(user) {
+                currentUser = user;
+                currentUserDiv.textContent = `Вы вошли: ${user.displayName}`;
                 loginBtn.style.display = "none";
                 logoutBtn.style.display = "block";
+                chatSelectDiv.style.display = "block";
+                
+                // Сохраняем пользователя в Firestore
+                await setDoc(doc(db, "users", user.uid), {
+                    name: user.displayName,
+                    email: user.email
+                });
+
+                loadUsers();
             } else {
-                form.style.display = "none";
+                currentUser = null;
+                currentChatId = null;
                 loginBtn.style.display = "block";
                 logoutBtn.style.display = "none";
+                chatSelectDiv.style.display = "none";
+                chatBoxDiv.style.display = "none";
+                currentUserDiv.textContent = "";
             }
         });
 
-        // ===== Firestore =====
-        async function addData(name, email, imageUrl = null) {
-            try {
-                await addDoc(collection(db, "requests"), {
-                    name,
-                    email,
-                    image: imageUrl || "",
-                    timestamp: new Date()
+        // ===== Загрузка списка пользователей =====
+        async function loadUsers() {
+            const usersSnapshot = await getDocs(collection(db, "users"));
+            userListDiv.innerHTML = "";
+            usersSnapshot.forEach(docu => {
+                if(docu.id !== currentUser.uid) {
+                    const option = document.createElement("option");
+                    option.value = docu.id;
+                    option.textContent = docu.data().name;
+                    userListDiv.appendChild(option);
+                }
+            });
+        }
+
+        // ===== Начало чата =====
+        document.getElementById("startChatBtn").onclick = async () => {
+            const selectedUserId = userListDiv.value;
+            if(!selectedUserId) return;
+
+            // Проверка существующего чата
+            const chatsRef = collection(db, "chats");
+            const q = query(chatsRef, where("participants", "array-contains", currentUser.uid));
+            const chatsSnapshot = await getDocs(q);
+
+            let chatDoc = null;
+            chatsSnapshot.forEach(chat => {
+                const participants = chat.data().participants;
+                if(participants.includes(selectedUserId)) {
+                    chatDoc = chat;
+                }
+            });
+
+            if(chatDoc) {
+                currentChatId = chatDoc.id;
+            } else {
+                // Создаем новый чат
+                const newChat = await addDoc(chatsRef, {
+                    participants: [currentUser.uid, selectedUserId],
+                    lastMessage: { text: "", timestamp: new Date() }
                 });
-                alert("Данные сохранены");
-            } catch (error) {
-                console.error("Ошибка записи:", error);
-                alert("Ошибка при отправке данных");
+                currentChatId = newChat.id;
             }
+
+            openChat(currentChatId);
         }
 
-        // ===== Storage =====
-        async function uploadImage(file) {
-            if (!file) return null;
-            const storageRef = ref(storage, `images/${file.name}_${Date.now()}`);
-            await uploadBytes(storageRef, file);
-            return await getDownloadURL(storageRef);
+        // ===== Открытие чата и получение сообщений =====
+        function openChat(chatId) {
+            chatBoxDiv.style.display = "flex";
+            document.getElementById("messages").innerHTML = "";
+
+            if(unsubscribeMessages) unsubscribeMessages();
+
+            const messagesRef = collection(db, `chats/${chatId}/messages`);
+            unsubscribeMessages = onSnapshot(messagesRef, snapshot => {
+                const messagesDiv = document.getElementById("messages");
+                messagesDiv.innerHTML = "";
+                snapshot.docs.sort((a,b)=> a.data().timestamp.seconds - b.data().timestamp.seconds).forEach(doc => {
+                    const msg = doc.data();
+                    const div = document.createElement("div");
+                    div.classList.add("message");
+                    div.classList.add(msg.senderId === currentUser.uid ? "self" : "other");
+                    div.textContent = msg.text;
+                    messagesDiv.appendChild(div);
+                    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                });
+            });
         }
 
-        // ===== Обработка формы =====
-        document.getElementById("feedbackForm").addEventListener("submit", async (e) => {
-            e.preventDefault();
-            const name = document.getElementById("userName").value;
-            const email = document.getElementById("userEmail").value;
-            const fileInput = document.getElementById("userImage");
-            const file = fileInput.files[0];
+        // ===== Отправка сообщений =====
+        document.getElementById("sendBtn").onclick = async () => {
+            const textInput = document.getElementById("messageInput");
+            const text = textInput.value.trim();
+            if(!text || !currentChatId) return;
 
-            const imageUrl = await uploadImage(file);
-            await addData(name, email, imageUrl);
+            await addDoc(collection(db, `chats/${currentChatId}/messages`), {
+                senderId: currentUser.uid,
+                text,
+                timestamp: new Date()
+            });
 
-            document.getElementById("feedbackForm").reset();
-        });
+            textInput.value = "";
+        }
     </script>
 </body>
 </html>
